@@ -5,13 +5,74 @@ import airportCoordinates from "./airports";
 
 mapboxgl.accessToken = process.env.REACT_APP_MAPBOX_ACCESS_TOKEN;
 
+const flightPathLayer = {
+  id: "flightPathsLayer",
+  type: "line",
+  source: "flightPaths",
+  layout: {
+    "line-join": "round",
+    "line-cap": "round",
+  },
+  paint: {
+    "line-color": "#FF5733", // Orange line
+    "line-width": 2,
+    "line-opacity": 1, // Always visible
+  },
+};
+
+const getMappedFlights = (flightData) => {
+  return flightData
+    .filter(
+      (flight) =>
+        flight.estDepartureAirport &&
+        flight.estArrivalAirport &&
+        airportCoordinates[flight.estDepartureAirport] &&
+        airportCoordinates[flight.estArrivalAirport]
+    )
+    .map((flight) => ({
+      ...flight,
+      departureLatitude:
+        airportCoordinates[flight.estDepartureAirport].latitude,
+      departureLongitude:
+        airportCoordinates[flight.estDepartureAirport].longitude,
+      arrivalLatitude: airportCoordinates[flight.estArrivalAirport].latitude,
+      arrivalLongitude: airportCoordinates[flight.estArrivalAirport].longitude,
+      currentPosition: {
+        longitude: airportCoordinates[flight.estDepartureAirport].longitude,
+        latitude: airportCoordinates[flight.estDepartureAirport].latitude,
+      },
+    }));
+};
+
+const getFlightPaths = (mappedFlights) => {
+  return {
+    type: "FeatureCollection",
+    features: mappedFlights.map((flight) => ({
+      type: "Feature",
+      geometry: {
+        type: "LineString",
+        coordinates: [
+          [flight.departureLongitude, flight.departureLatitude],
+          [flight.currentPosition.longitude, flight.currentPosition.latitude],
+        ],
+      },
+      properties: {
+        callsign: flight.callsign,
+        departureAirport: flight.estDepartureAirport,
+        arrivalAirport: flight.estArrivalAirport,
+        departureTime: flight.firstSeen, // Unix timestamp of departure
+        arrivalTime: flight.lastSeen, // Unix timestamp of arrival
+      },
+    })),
+  };
+};
+
 const Map = () => {
   const mapContainer = useRef(null);
   const map = useRef(null);
   const animationRef = useRef(null);
   const currentTimeRef = useRef(Math.floor(Date.now() / 1000)); // Use ref for current time
   const [flights, setFlights] = useState([]);
-  const [isPlaying, setIsPlaying] = useState(false);
   const previousTimestampRef = useRef(null); // For managing elapsed time
 
   useEffect(() => {
@@ -54,57 +115,13 @@ const Map = () => {
 
       const flightData = response.data;
       // Map airport codes to coordinates and initialize currentPosition
-      const mappedFlights = flightData
-        .filter(
-          (flight) =>
-            flight.estDepartureAirport &&
-            flight.estArrivalAirport &&
-            airportCoordinates[flight.estDepartureAirport] &&
-            airportCoordinates[flight.estArrivalAirport]
-        )
-        .map((flight) => ({
-          ...flight,
-          departureLatitude:
-            airportCoordinates[flight.estDepartureAirport].latitude,
-          departureLongitude:
-            airportCoordinates[flight.estDepartureAirport].longitude,
-          arrivalLatitude:
-            airportCoordinates[flight.estArrivalAirport].latitude,
-          arrivalLongitude:
-            airportCoordinates[flight.estArrivalAirport].longitude,
-          currentPosition: {
-            longitude: airportCoordinates[flight.estDepartureAirport].longitude,
-            latitude: airportCoordinates[flight.estDepartureAirport].latitude,
-          },
-        }));
+      const mappedFlights = getMappedFlights(flightData);
 
       // Store flight data in state
       setFlights(mappedFlights);
 
       // Convert flight data to GeoJSON for map visualization
-      const flightPaths = {
-        type: "FeatureCollection",
-        features: mappedFlights.map((flight) => ({
-          type: "Feature",
-          geometry: {
-            type: "LineString",
-            coordinates: [
-              [flight.departureLongitude, flight.departureLatitude],
-              [
-                flight.currentPosition.longitude,
-                flight.currentPosition.latitude,
-              ],
-            ],
-          },
-          properties: {
-            callsign: flight.callsign,
-            departureAirport: flight.estDepartureAirport,
-            arrivalAirport: flight.estArrivalAirport,
-            departureTime: flight.firstSeen, // Unix timestamp of departure
-            arrivalTime: flight.lastSeen, // Unix timestamp of arrival
-          },
-        })),
-      };
+      const flightPaths = getFlightPaths(mappedFlights);
 
       // Add flight paths to the map
       if (map.current.getSource("flightPaths")) {
@@ -115,20 +132,7 @@ const Map = () => {
           data: flightPaths,
         });
 
-        map.current.addLayer({
-          id: "flightPathsLayer",
-          type: "line",
-          source: "flightPaths",
-          layout: {
-            "line-join": "round",
-            "line-cap": "round",
-          },
-          paint: {
-            "line-color": "#FF5733", // Orange line
-            "line-width": 2,
-            "line-opacity": 1, // Always visible
-          },
-        });
+        map.current.addLayer(flightPathLayer);
 
         // Optionally, fit map to flight paths
         if (flightPaths.features.length > 0) {
@@ -156,8 +160,8 @@ const Map = () => {
     const delta = timestamp - previousTimestampRef.current;
     previousTimestampRef.current = timestamp;
 
-    // Define speed: how many seconds to advance per millisecond
-    const speed = 100; // 1 second per 1000 ms
+    // Define speed: how many seconds to advance per second
+    const speed = 100;
     const timeIncrement = Math.floor((delta * speed) / 1000); // Increment in seconds
 
     if (timeIncrement > 0) {
@@ -226,32 +230,14 @@ const Map = () => {
       map.current.getSource("flightPaths").setData(flightPaths);
     }
 
-    // Check if any flights are still in progress
-    const anyInProgress = updatedFlights.some(
-      (flight) => currentTimeRef.current < flight.lastSeen
-    );
-
-    console.log("anyInProgress", anyInProgress);
-
-    // if (anyInProgress) {
     animationRef.current = requestAnimationFrame(animateFlightPaths);
-    // } else {
-    //   setIsPlaying(false);
     //   cancelAnimationFrame(animationRef.current);
     //   previousTimestampRef.current = null; // Reset for next play
-    // }
   };
 
   const handlePlayButtonClick = () => {
-    // if (isPlaying) {
-    //   setIsPlaying(false);
-    //   cancelAnimationFrame(animationRef.current);
-    //   previousTimestampRef.current = null; // Reset
-    // } else {
-    setIsPlaying(true);
     currentTimeRef.current = Math.floor(Date.now() / 1000); // Reset current time to now or set to flight's start time
     animationRef.current = requestAnimationFrame(animateFlightPaths); // Start the animation
-    // }
   };
 
   return (
@@ -272,7 +258,7 @@ const Map = () => {
           cursor: "pointer",
         }}
       >
-        {isPlaying ? "Pause" : "Play"}
+        Start
       </button>
       <div ref={mapContainer} style={{ width: "100vw", height: "100vh" }} />
     </div>
