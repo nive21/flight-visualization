@@ -14,9 +14,13 @@ const flightPathLayer = {
     "line-cap": "round",
   },
   paint: {
-    "line-color": "#FF5733", // Orange line
+    "line-color": [
+      "case",
+      ["==", ["get", "progress"], 1],
+      "rgba(255, 255, 0, 0.3)", // Low-opacity Yellow for progress === 1, ie. flight has arrived
+      "rgba(255, 87, 51, 1)", // Orange for in-progress flights, ie. progress < 1
+    ],
     "line-width": 2,
-    "line-opacity": 1, // Always visible
   },
 };
 
@@ -44,26 +48,46 @@ const getMappedFlights = (flightData) => {
     }));
 };
 
-const getFlightPaths = (mappedFlights) => {
+const getFlightPaths = (mappedFlights, currentTime) => {
   return {
     type: "FeatureCollection",
-    features: mappedFlights.map((flight) => ({
-      type: "Feature",
-      geometry: {
-        type: "LineString",
-        coordinates: [
-          [flight.departureLongitude, flight.departureLatitude],
-          [flight.currentPosition.longitude, flight.currentPosition.latitude],
-        ],
-      },
-      properties: {
-        callsign: flight.callsign,
-        departureAirport: flight.estDepartureAirport,
-        arrivalAirport: flight.estArrivalAirport,
-        departureTime: flight.firstSeen, // Unix timestamp of departure
-        arrivalTime: flight.lastSeen, // Unix timestamp of arrival
-      },
-    })),
+    features: mappedFlights.map((flight) => {
+      const flightDuration = flight.lastSeen - flight.firstSeen;
+
+      let progress = (currentTime - flight.firstSeen) / flightDuration;
+
+      if (progress >= 1) {
+        progress = 1; // Flight has arrived
+      } else if (progress < 0) {
+        progress = 0; // Flight has not departed yet
+      }
+
+      const interpolatedLng =
+        flight.departureLongitude +
+        (flight.arrivalLongitude - flight.departureLongitude) * progress;
+      const interpolatedLat =
+        flight.departureLatitude +
+        (flight.arrivalLatitude - flight.departureLatitude) * progress;
+
+      return {
+        type: "Feature",
+        geometry: {
+          type: "LineString",
+          coordinates: [
+            [flight.departureLongitude, flight.departureLatitude],
+            [interpolatedLng, interpolatedLat],
+          ],
+        },
+        properties: {
+          callsign: flight.callsign,
+          departureAirport: flight.estDepartureAirport,
+          arrivalAirport: flight.estArrivalAirport,
+          departureTime: flight.firstSeen,
+          arrivalTime: flight.lastSeen,
+          progress: progress,
+        },
+      };
+    }),
   };
 };
 
@@ -71,9 +95,17 @@ const Map = () => {
   const mapContainer = useRef(null);
   const map = useRef(null);
   const animationRef = useRef(null);
-  const currentTimeRef = useRef(Math.floor(Date.now() / 1000)); // Use ref for current time
-  const [flights, setFlights] = useState([]);
   const previousTimestampRef = useRef(null); // For managing elapsed time
+  const [flights, setFlights] = useState([]);
+
+  const current = Math.floor(Date.now() / 1000); // Current time in UNIX timestamp
+  const startTime = current - 7200; // Two hours ago
+  const endTime = current;
+
+  const [currentTime, setCurrentTime] = useState(startTime); // To be set after fetching data
+
+  // Animation settings
+  const SPEED = 500; // How many seconds to advance per second
 
   useEffect(() => {
     if (map.current) return;
@@ -99,18 +131,14 @@ const Map = () => {
         cancelAnimationFrame(animationRef.current);
       }
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Fetch flight data for the past hour using begin and end times
+  // Fetch flight data for the past 2 hours
   const fetchFlightData = async () => {
     try {
-      const currentTime = Math.floor(Date.now() / 1000); // Current time in UNIX timestamp
-      const startTime = currentTime - 7200; // Two hours ago
-
       // Call OpenSky API with time range
       const response = await axios.get(
-        `https://opensky-network.org/api/flights/all?begin=${startTime}&end=${currentTime}`
+        `https://opensky-network.org/api/flights/all?begin=${startTime}&end=${current}`
       );
 
       const flightData = response.data;
@@ -121,7 +149,7 @@ const Map = () => {
       setFlights(mappedFlights);
 
       // Convert flight data to GeoJSON for map visualization
-      const flightPaths = getFlightPaths(mappedFlights);
+      const flightPaths = getFlightPaths(mappedFlights, startTime);
 
       // Add flight paths to the map
       if (map.current.getSource("flightPaths")) {
@@ -148,10 +176,24 @@ const Map = () => {
           map.current.fitBounds(bounds, { padding: 50 });
         }
       }
+
+      // Start the animation after data is loaded
+      startAnimation();
     } catch (error) {
       console.error("Error fetching flight data:", error);
     }
   };
+
+  useEffect(() => {
+    if (flights.length === 0 || currentTime === null) return;
+
+    // Update flight paths based on currentTime
+    const updatedFlightPaths = getFlightPaths(flights, currentTime);
+
+    if (map.current.getSource("flightPaths")) {
+      map.current.getSource("flightPaths").setData(updatedFlightPaths);
+    }
+  }, [currentTime, flights]);
 
   const animateFlightPaths = (timestamp) => {
     if (!previousTimestampRef.current) {
@@ -160,106 +202,70 @@ const Map = () => {
     const delta = timestamp - previousTimestampRef.current;
     previousTimestampRef.current = timestamp;
 
-    // Define speed: how many seconds to advance per second
-    const speed = 100;
-    const timeIncrement = Math.floor((delta * speed) / 1000); // Increment in seconds
+    // Calculate time increment based on speed and elapsed time
+    const timeIncrement = Math.floor((delta * SPEED) / 1000); // Increment in seconds
 
-    if (timeIncrement > 0) {
-      currentTimeRef.current += timeIncrement;
+    if (timeIncrement > 0 && currentTime !== null && endTime !== null) {
+      setCurrentTime((prevTime) => {
+        const newTime = prevTime + timeIncrement;
+        if (newTime >= endTime) {
+          cancelAnimationFrame(animationRef.current);
+          return endTime;
+        }
+        return newTime;
+      });
     }
 
-    // Update flight positions based on currentTimeRef.current
-    const updatedFlights = flights.map((flight) => {
-      const flightDuration = flight.lastSeen - flight.firstSeen;
-      if (flightDuration === 0) return flight; // Avoid division by zero
-
-      const progress =
-        (currentTimeRef.current - flight.firstSeen) / (flightDuration * 10);
-
-      if (progress >= 1) {
-        return {
-          ...flight,
-          currentPosition: {
-            longitude: flight.arrivalLongitude,
-            latitude: flight.arrivalLatitude,
-          },
-        }; // Flight has arrived
-      }
-
-      const interpolatedLng =
-        flight.departureLongitude +
-        (flight.arrivalLongitude - flight.departureLongitude) * progress;
-      const interpolatedLat =
-        flight.departureLatitude +
-        (flight.arrivalLatitude - flight.departureLatitude) * progress;
-
-      return {
-        ...flight,
-        currentPosition: {
-          longitude: interpolatedLng,
-          latitude: interpolatedLat,
-        },
-      };
-    });
-
-    setFlights(updatedFlights);
-
-    // Update the GeoJSON source with updated flight positions
-    const flightPaths = {
-      type: "FeatureCollection",
-      features: updatedFlights.map((flight) => ({
-        type: "Feature",
-        geometry: {
-          type: "LineString",
-          coordinates: [
-            [flight.departureLongitude, flight.departureLatitude],
-            [flight.currentPosition.longitude, flight.currentPosition.latitude],
-          ],
-        },
-        properties: {
-          callsign: flight.callsign,
-          departureAirport: flight.estDepartureAirport,
-          arrivalAirport: flight.estArrivalAirport,
-          departureTime: flight.firstSeen,
-          arrivalTime: flight.lastSeen,
-        },
-      })),
-    };
-
-    if (map.current.getSource("flightPaths")) {
-      map.current.getSource("flightPaths").setData(flightPaths);
-    }
-
+    // Continue the animation
     animationRef.current = requestAnimationFrame(animateFlightPaths);
-    //   cancelAnimationFrame(animationRef.current);
-    //   previousTimestampRef.current = null; // Reset for next play
   };
 
-  const handlePlayButtonClick = () => {
-    currentTimeRef.current = Math.floor(Date.now() / 1000); // Reset current time to now or set to flight's start time
-    animationRef.current = requestAnimationFrame(animateFlightPaths); // Start the animation
+  const startAnimation = () => {
+    animationRef.current = requestAnimationFrame(animateFlightPaths);
+  };
+
+  const handleSliderChange = (e) => {
+    const selectedTime = parseInt(e.target.value, 10);
+    setCurrentTime(selectedTime);
   };
 
   return (
     <div>
-      <button
-        onClick={handlePlayButtonClick}
-        style={{
-          position: "absolute",
-          top: "20px",
-          left: "20px",
-          padding: "10px 20px",
-          fontSize: "16px",
-          backgroundColor: "#FF5733",
-          color: "white",
-          border: "none",
-          borderRadius: "5px",
-          zIndex: 1, // Ensure button is above map
-          cursor: "pointer",
-        }}
-      >
-        Start
-      </button>
+      {
+        <div
+          style={{
+            position: "absolute",
+            top: "20px",
+            left: "50%",
+            transform: "translateX(-50%)",
+            padding: "10px",
+            backgroundColor: "rgba(255, 255, 255, 0.8)",
+            borderRadius: "5px",
+            zIndex: 1,
+            width: "80%",
+          }}
+        >
+          <input
+            type="range"
+            min={startTime}
+            max={endTime}
+            value={currentTime}
+            onChange={handleSliderChange}
+            style={{ width: "100%" }}
+          />
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              marginTop: "5px",
+            }}
+          >
+            <span>{new Date(startTime * 1000).toLocaleTimeString()}</span>
+            <span>{new Date(currentTime * 1000).toLocaleTimeString()}</span>
+            <span>{new Date(endTime * 1000).toLocaleTimeString()}</span>
+          </div>
+        </div>
+      }
       <div ref={mapContainer} style={{ width: "100vw", height: "100vh" }} />
     </div>
   );
