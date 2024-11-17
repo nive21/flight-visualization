@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from "react";
 import mapboxgl from "mapbox-gl";
 import axios from "axios";
 import airportCoordinates from "./airports";
+import { rawflightData } from "./flightData";
 
 mapboxgl.accessToken = process.env.REACT_APP_MAPBOX_ACCESS_TOKEN;
 
@@ -25,36 +26,42 @@ const flightPathLayer = {
 };
 
 const getMappedFlights = (flightData) => {
-  return flightData
-    .filter(
-      (flight) =>
-        flight.estDepartureAirport &&
-        flight.estArrivalAirport &&
-        airportCoordinates[flight.estDepartureAirport] &&
-        airportCoordinates[flight.estArrivalAirport]
-    )
-    .map((flight) => ({
+  return flightData.map((flight) => {
+    // Get airport codes
+    const departureAirport = flight.departure.icao;
+    const arrivalAirport = flight.arrival.icao;
+    // Get coordinates
+    const departureCoordinates = airportCoordinates?.[departureAirport];
+    const arrivalCoordinates = airportCoordinates?.[arrivalAirport];
+
+    if (!departureCoordinates || !arrivalCoordinates) {
+      return null;
+    }
+
+    return {
       ...flight,
-      departureLatitude:
-        airportCoordinates[flight.estDepartureAirport].latitude,
-      departureLongitude:
-        airportCoordinates[flight.estDepartureAirport].longitude,
-      arrivalLatitude: airportCoordinates[flight.estArrivalAirport].latitude,
-      arrivalLongitude: airportCoordinates[flight.estArrivalAirport].longitude,
-      currentPosition: {
-        longitude: airportCoordinates[flight.estDepartureAirport].longitude,
-        latitude: airportCoordinates[flight.estDepartureAirport].latitude,
-      },
-    }));
+      departureLatitude: departureCoordinates.latitude,
+      departureLongitude: departureCoordinates.longitude,
+      arrivalLatitude: arrivalCoordinates.latitude,
+      arrivalLongitude: arrivalCoordinates.longitude,
+    };
+  });
 };
 
 const getFlightPaths = (mappedFlights, currentTime) => {
   return {
     type: "FeatureCollection",
     features: mappedFlights.map((flight) => {
-      const flightDuration = flight.lastSeen - flight.firstSeen;
+      // Parse ISO datetime strings to UNIX timestamps (in seconds)
+      const departureTime = Math.floor(
+        new Date(flight.departure.estimated).getTime() / 1000
+      );
+      const arrivalTime = Math.floor(
+        new Date(flight.arrival.estimated).getTime() / 1000
+      );
 
-      let progress = (currentTime - flight.firstSeen) / flightDuration;
+      const flightDuration = arrivalTime - departureTime;
+      let progress = (currentTime - departureTime) / flightDuration;
 
       if (progress >= 1) {
         progress = 1; // Flight has arrived
@@ -79,11 +86,8 @@ const getFlightPaths = (mappedFlights, currentTime) => {
           ],
         },
         properties: {
-          callsign: flight.callsign,
-          departureAirport: flight.estDepartureAirport,
-          arrivalAirport: flight.estArrivalAirport,
-          departureTime: flight.firstSeen,
-          arrivalTime: flight.lastSeen,
+          departureTime: departureTime, // In UNIX timestamp
+          arrivalTime: arrivalTime, // In UNIX timestamp
           progress: progress,
         },
       };
@@ -113,9 +117,9 @@ const Map = () => {
     // Initialize Mapbox with terrain
     map.current = new mapboxgl.Map({
       container: mapContainer.current,
-      style: "mapbox://styles/mapbox/satellite-streets-v12",
-      center: [0, 20], // Adjust as needed
-      zoom: 1.5, // Adjust as needed
+      style: "mapbox://styles/nivedhitha/cm3kr8moy008w01sqbthe8t92",
+      center: [0, 20],
+      zoom: 1.5,
       pitch: 45,
       bearing: 0,
       antialias: true,
@@ -136,11 +140,11 @@ const Map = () => {
   // Fetch flight data for the past 2 hours
   const fetchFlightData = async () => {
     try {
-      // Call OpenSky API with time range
-      const response = await axios.get(
-        `https://opensky-network.org/api/flights/all?begin=${startTime}&end=${current}`
-      );
-
+      // Call Aviation Stack API with flight status active filter
+      // const response = await axios.get(
+      //   `https://api.aviationstack.com/v1/flights?access_key=${process.env.AVIATION_STACK_ACCESS_KEY}&flight_status=active`
+      // );
+      const response = rawflightData;
       const flightData = response.data;
       // Map airport codes to coordinates and initialize currentPosition
       const mappedFlights = getMappedFlights(flightData);
