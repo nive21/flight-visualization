@@ -1,8 +1,9 @@
 import React, { useEffect, useRef, useState } from "react";
 import mapboxgl from "mapbox-gl";
 import axios from "axios";
-import airportCoordinates from "./airports";
+import airportCoordinates from "./data/airports";
 import { rawflightData } from "./flightData";
+import airplane from "./assets/airplane.png";
 
 mapboxgl.accessToken = process.env.REACT_APP_MAPBOX_ACCESS_TOKEN;
 
@@ -126,15 +127,54 @@ const Map = () => {
     });
 
     map.current.on("load", () => {
-      fetchFlightData();
-    });
+      // Add the airplane image to the map
+      map.current.loadImage(airplane, (error, image) => {
+        if (error) {
+          console.error("Error loading airplane image:", error);
+          return;
+        }
+        // Add the image with the name 'airplane'
+        if (!map.current.hasImage("airplane")) {
+          map.current.addImage("airplane", image);
+        }
 
-    // Cleanup on unmount
-    return () => {
-      if (animationRef.current) {
-        cancelAnimationFrame(animationRef.current);
-      }
-    };
+        // Add flight paths and airplane sources/layers
+        fetchFlightData();
+
+        // Add the airplane positions source
+        map.current.addSource("airplanes", {
+          type: "geojson",
+          data: {
+            type: "FeatureCollection",
+            features: [], // Initially empty
+          },
+        });
+
+        // Add the airplane symbol layer
+        map.current.addLayer({
+          id: "airplanesLayer",
+          type: "symbol",
+          source: "airplanes",
+          layout: {
+            "icon-image": "airplane",
+            "icon-size": 0.08,
+            "icon-rotation-alignment": "map",
+            "icon-allow-overlap": true,
+            "icon-ignore-placement": true,
+          },
+        });
+      });
+
+      // Cleanup on unmount
+      return () => {
+        if (animationRef.current) {
+          cancelAnimationFrame(animationRef.current);
+        }
+        if (map.current) {
+          map.current.remove();
+        }
+      };
+    });
   }, []);
 
   // Fetch flight data for the past 2 hours
@@ -147,13 +187,15 @@ const Map = () => {
       const response = rawflightData;
       const flightData = response.data;
       // Map airport codes to coordinates and initialize currentPosition
-      const mappedFlights = getMappedFlights(flightData);
+      const validFlights = getMappedFlights(flightData)?.filter(
+        (flight) => flight
+      );
 
       // Store flight data in state
-      setFlights(mappedFlights);
+      setFlights(validFlights);
 
       // Convert flight data to GeoJSON for map visualization
-      const flightPaths = getFlightPaths(mappedFlights, startTime);
+      const flightPaths = getFlightPaths(validFlights, startTime);
 
       // Add flight paths to the map
       if (map.current.getSource("flightPaths")) {
@@ -181,6 +223,9 @@ const Map = () => {
         }
       }
 
+      // Initialize airplane positions
+      updateAirplanePositions(validFlights, startTime);
+
       // Start the animation after data is loaded
       startAnimation();
     } catch (error) {
@@ -197,6 +242,9 @@ const Map = () => {
     if (map.current.getSource("flightPaths")) {
       map.current.getSource("flightPaths").setData(updatedFlightPaths);
     }
+
+    // Update airplane positions
+    updateAirplanePositions(flights, currentTime);
   }, [currentTime, flights]);
 
   const animateFlightPaths = (timestamp) => {
@@ -233,6 +281,60 @@ const Map = () => {
     setCurrentTime(selectedTime);
   };
 
+  /**
+   * Updates the airplane positions on the map based on the current time.
+   * @param {Array} flights - The array of flight objects.
+   * @param {number} currentTime - The current UNIX timestamp.
+   */
+  const updateAirplanePositions = (flights, currentTime) => {
+    const airplaneFeatures = flights.map((flight) => {
+      // Parse ISO datetime strings to UNIX timestamps (in seconds)
+      const departureTime = Math.floor(
+        new Date(flight.departure.estimated).getTime() / 1000
+      );
+      const arrivalTime = Math.floor(
+        new Date(flight.arrival.estimated).getTime() / 1000
+      );
+
+      const flightDuration = arrivalTime - departureTime;
+      let progress = (currentTime - departureTime) / flightDuration;
+
+      if (progress >= 1) {
+        progress = 1; // Flight has arrived
+      } else if (progress < 0) {
+        progress = 0; // Flight has not departed yet
+      }
+
+      const interpolatedLng =
+        flight.departureLongitude +
+        (flight.arrivalLongitude - flight.departureLongitude) * progress;
+      const interpolatedLat =
+        flight.departureLatitude +
+        (flight.arrivalLatitude - flight.departureLatitude) * progress;
+
+      return {
+        type: "Feature",
+        geometry: {
+          type: "Point",
+          coordinates: [interpolatedLng, interpolatedLat],
+        },
+        properties: {
+          progress: progress,
+          flightId: flight.id, // Assuming each flight has a unique ID
+        },
+      };
+    });
+
+    const airplanesGeoJSON = {
+      type: "FeatureCollection",
+      features: airplaneFeatures,
+    };
+
+    if (map.current.getSource("airplanes")) {
+      map.current.getSource("airplanes").setData(airplanesGeoJSON);
+    }
+  };
+
   return (
     <div>
       {
@@ -246,7 +348,7 @@ const Map = () => {
             backgroundColor: "rgba(255, 255, 255, 0.8)",
             borderRadius: "5px",
             zIndex: 1,
-            width: "80%",
+            width: "40%",
           }}
         >
           <input
@@ -264,9 +366,8 @@ const Map = () => {
               marginTop: "5px",
             }}
           >
-            <span>{new Date(startTime * 1000).toLocaleTimeString()}</span>
-            <span>{new Date(currentTime * 1000).toLocaleTimeString()}</span>
-            <span>{new Date(endTime * 1000).toLocaleTimeString()}</span>
+            <span>2 hrs ago</span>
+            <span>Now</span>
           </div>
         </div>
       }
