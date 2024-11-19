@@ -1,0 +1,9 @@
+.tooltip {
+  position: absolute;
+  z-index: 2;
+  pointer-events: none;
+  background-color: antiquewhite;
+  padding: 5px;
+  border-radius: 3px;
+  font-size: 12px;
+}
