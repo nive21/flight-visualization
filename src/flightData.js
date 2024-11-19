@@ -1,4 +1,4 @@
-export const rawflightData = {
+export const rawFlightData = {
   pagination: {
     // limit: 100,
     // offset: 0,

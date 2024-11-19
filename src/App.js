@@ -1,8 +1,8 @@
 import React from "react";
-import Map from "./Map";
+import WorldMap from "./WorldMap";
 
 function App() {
-  return <Map />;
+  return <WorldMap />;
 }
 
 export default App;
