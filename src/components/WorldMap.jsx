@@ -7,7 +7,7 @@ import { Map } from "react-map-gl";
 import DeckGL from "@deck.gl/react";
 import { rawFlightData } from "../data/flightData";
 import TimeSlider from "./TimeSlider";
-import airplane from "../assets/airplane2.glb";
+import airplane from "../assets/airplane.glb";
 
 const MAPBOX_TOKEN = process.env.REACT_APP_MAPBOX_ACCESS_TOKEN;
 const INITIAL_VIEW_STATE = {
@@ -237,11 +237,8 @@ const WorldMap = () => {
       }),
       pickable: false,
       getPosition: (d) => d.position,
-      // scenegraph: airplane,
-      scenegraph:
-        "https://raw.githubusercontent.com/KhronosGroup/glTF-Sample-Models/master/2.0/BoxAnimated/glTF-Binary/BoxAnimated.glb",
+      scenegraph: airplane,
       getOrientation: (d) => {
-        console.log("d", d);
         const { position, previousPosition } = d;
         if (position && previousPosition) {
           const bearing = calculateBearing(previousPosition, position);
@@ -249,7 +246,7 @@ const WorldMap = () => {
         }
         return [0, 0, 90];
       },
-      sizeScale: 500000,
+      sizeScale: 500,
       _lighting: "pbr",
     });
 
