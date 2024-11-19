@@ -1,10 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ScatterplotLayer } from "@deck.gl/layers";
 import airportCoordinates from "../data/airports";
+import { ScenegraphLayer } from "@deck.gl/mesh-layers";
+
 import { Map } from "react-map-gl";
 import DeckGL from "@deck.gl/react";
 import { rawFlightData } from "../data/flightData";
 import TimeSlider from "./TimeSlider";
+import airplane from "../assets/airplane2.glb";
 
 const MAPBOX_TOKEN = process.env.REACT_APP_MAPBOX_ACCESS_TOKEN;
 const INITIAL_VIEW_STATE = {
@@ -18,8 +21,21 @@ const ACCENT_COLOR_1 = [128, 0, 128];
 const ACCENT_COLOR_2 = [46, 139, 87];
 const NUM_WAYPOINTS = 100;
 
+function calculateBearing(from, to) {
+  const [lon1, lat1] = from.map((deg) => (deg * Math.PI) / 180);
+  const [lon2, lat2] = to.map((deg) => (deg * Math.PI) / 180);
+
+  const deltaLon = lon2 - lon1;
+  const x = Math.sin(deltaLon) * Math.cos(lat2);
+  const y =
+    Math.cos(lat1) * Math.sin(lat2) -
+    Math.sin(lat1) * Math.cos(lat2) * Math.cos(deltaLon);
+  const bearing = (Math.atan2(x, y) * 180) / Math.PI;
+  return (bearing + 360) % 360;
+}
+
 const getLocationLayer = (validFlights, color, type) => ({
-  id: "dep-layer",
+  id: type,
   data: validFlights,
   getPosition: (d) => {
     const location = airportCoordinates[d?.[type].icao];
@@ -40,12 +56,26 @@ const getFlightsWithLocations = (flights) => {
     const { longitude: arrivalLongitude, latitude: arrivalLatitude } =
       airportCoordinates[flight.arrival.icao];
 
+    const from = [departureLongitude, departureLatitude];
+    const to = [arrivalLongitude, arrivalLatitude];
+
+    const waypoints = generateArcPoints(from, to, NUM_WAYPOINTS);
+
+    // Calculate the progress of the flight
+    const departureTime = Math.floor(
+      new Date(flight.departure.estimated).getTime() / 1000
+    );
+    const arrivalTime = Math.floor(
+      new Date(flight.arrival.estimated).getTime() / 1000
+    );
+
+    const flightDuration = arrivalTime - departureTime;
     return {
       ...flight,
-      departureLongitude,
-      departureLatitude,
-      arrivalLongitude,
-      arrivalLatitude,
+      waypoints,
+      departureTime,
+      arrivalTime,
+      flightDuration,
     };
   });
 };
@@ -105,7 +135,6 @@ const WorldMap = () => {
 
   // Time management
   const currentTimestamp = Math.floor(Date.now() / 1000);
-  console.log("currentTimestamp", currentTimestamp);
   const startTime = currentTimestamp - 86400; // Past 24 hours
   const endTime = currentTimestamp;
 
@@ -165,20 +194,8 @@ const WorldMap = () => {
     const arcLayer = new ScatterplotLayer({
       id: "flight-path-scatter",
       data: flights.flatMap((flight) => {
-        const from = [flight.departureLongitude, flight.departureLatitude];
-        const to = [flight.arrivalLongitude, flight.arrivalLatitude];
-
-        const waypoints = generateArcPoints(from, to, NUM_WAYPOINTS);
-
-        // Calculate the progress of the flight
-        const departureTime = Math.floor(
-          new Date(flight.departure.estimated).getTime() / 1000
-        );
-        const arrivalTime = Math.floor(
-          new Date(flight.arrival.estimated).getTime() / 1000
-        );
-        const flightDuration = arrivalTime - departureTime;
-        let progress = (currentTime - departureTime) / flightDuration;
+        let progress =
+          (currentTime - flight.departureTime) / flight.flightDuration;
 
         if (progress >= 1) {
           progress = 1;
@@ -188,7 +205,7 @@ const WorldMap = () => {
 
         // Slice the waypoints array based on progress
         const numWaypointsToShow = Math.floor(progress * NUM_WAYPOINTS);
-        return waypoints.slice(0, numWaypointsToShow) || [];
+        return flight.waypoints.slice(0, numWaypointsToShow) || [];
       }),
       getPosition: (d) => d.position,
       getFillColor: [255, 255, 0],
@@ -196,7 +213,47 @@ const WorldMap = () => {
       pickable: false,
     });
 
-    setLayers([arcLayer, depLayer, arrLayer]);
+    const airplaneLayer = new ScenegraphLayer({
+      id: "airplane-layer",
+      data: flights.flatMap((flight) => {
+        let progress =
+          (currentTime - flight.departureTime) / flight.flightDuration;
+
+        if (progress >= 1) {
+          progress = 1;
+        } else if (progress <= 0) {
+          progress = 0;
+        }
+
+        // Slice the waypoints array based on progress
+        const numWaypointsToShow = Math.floor(progress * NUM_WAYPOINTS);
+        return (
+          {
+            ...flight.waypoints?.[numWaypointsToShow - 1],
+            previousPosition:
+              flight.waypoints?.[numWaypointsToShow - 2]?.position,
+          } || []
+        );
+      }),
+      pickable: false,
+      getPosition: (d) => d.position,
+      // scenegraph: airplane,
+      scenegraph:
+        "https://raw.githubusercontent.com/KhronosGroup/glTF-Sample-Models/master/2.0/BoxAnimated/glTF-Binary/BoxAnimated.glb",
+      getOrientation: (d) => {
+        console.log("d", d);
+        const { position, previousPosition } = d;
+        if (position && previousPosition) {
+          const bearing = calculateBearing(previousPosition, position);
+          return [0, -bearing, 90];
+        }
+        return [0, 0, 90];
+      },
+      sizeScale: 500000,
+      _lighting: "pbr",
+    });
+
+    setLayers([arcLayer, depLayer, arrLayer, airplaneLayer]);
   }, [flights, currentTime]);
 
   const animateTime = useCallback(() => {
