@@ -1,13 +1,18 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ScatterplotLayer } from "@deck.gl/layers";
-import airportCoordinates from "../data/airports";
 import { ScenegraphLayer } from "@deck.gl/mesh-layers";
 
 import { Map } from "react-map-gl";
 import DeckGL from "@deck.gl/react";
-import { rawFlightData } from "../data/flightData";
 import TimeSlider from "./TimeSlider";
 import airplane from "../assets/airplane.glb";
+import {
+  calculateBearing,
+  getFlightsWithLocations,
+  getLocationLayer,
+  NUM_WAYPOINTS,
+} from "../utility/helperFunctions";
+import { createClient } from "@supabase/supabase-js";
 
 const MAPBOX_TOKEN = process.env.REACT_APP_MAPBOX_ACCESS_TOKEN;
 const INITIAL_VIEW_STATE = {
@@ -19,112 +24,11 @@ const INITIAL_VIEW_STATE = {
 };
 const ACCENT_COLOR_1 = [128, 0, 128];
 const ACCENT_COLOR_2 = [46, 139, 87];
-const NUM_WAYPOINTS = 100;
 
-function calculateBearing(from, to) {
-  const [lon1, lat1] = from.map((deg) => (deg * Math.PI) / 180);
-  const [lon2, lat2] = to.map((deg) => (deg * Math.PI) / 180);
-
-  const deltaLon = lon2 - lon1;
-  const x = Math.sin(deltaLon) * Math.cos(lat2);
-  const y =
-    Math.cos(lat1) * Math.sin(lat2) -
-    Math.sin(lat1) * Math.cos(lat2) * Math.cos(deltaLon);
-  const bearing = (Math.atan2(x, y) * 180) / Math.PI;
-  return (bearing + 360) % 360;
-}
-
-const getLocationLayer = (validFlights, color, type) => ({
-  id: type,
-  data: validFlights,
-  getPosition: (d) => {
-    const location = airportCoordinates[d?.[type].icao];
-    return [location.longitude, location.latitude];
-  },
-  getFillColor: color,
-  getRadius: 50000, // in meters
-  opacity: 0.8,
-  radiusMinPixels: 5,
-  radiusMaxPixels: 10,
-  pickable: true,
-});
-
-const getFlightsWithLocations = (flights) => {
-  return flights.map((flight) => {
-    const { longitude: departureLongitude, latitude: departureLatitude } =
-      airportCoordinates[flight.departure.icao];
-    const { longitude: arrivalLongitude, latitude: arrivalLatitude } =
-      airportCoordinates[flight.arrival.icao];
-
-    const from = [departureLongitude, departureLatitude];
-    const to = [arrivalLongitude, arrivalLatitude];
-
-    const waypoints = generateArcPoints(from, to, NUM_WAYPOINTS);
-
-    // Calculate the progress of the flight
-    const departureTime = Math.floor(
-      new Date(flight.departure.estimated).getTime() / 1000
-    );
-    const arrivalTime = Math.floor(
-      new Date(flight.arrival.estimated).getTime() / 1000
-    );
-
-    const flightDuration = arrivalTime - departureTime;
-    return {
-      ...flight,
-      waypoints,
-      departureTime,
-      arrivalTime,
-      flightDuration,
-    };
-  });
-};
-
-// Function to interpolate positions along the great circle path
-function interpolateGreatCircle(from, to, fraction) {
-  const [lon1, lat1] = from.map((deg) => (deg * Math.PI) / 180);
-  const [lon2, lat2] = to.map((deg) => (deg * Math.PI) / 180);
-
-  const deltaLat = lat2 - lat1;
-  const deltaLon = lon2 - lon1;
-
-  const a =
-    Math.sin(deltaLat / 2) ** 2 +
-    Math.cos(lat1) * Math.cos(lat2) * Math.sin(deltaLon / 2) ** 2;
-
-  const deltaSigma = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-
-  if (deltaSigma === 0) {
-    return from;
-  }
-
-  const A = Math.sin((1 - fraction) * deltaSigma) / Math.sin(deltaSigma);
-  const B = Math.sin(fraction * deltaSigma) / Math.sin(deltaSigma);
-
-  const x =
-    A * Math.cos(lat1) * Math.cos(lon1) + B * Math.cos(lat2) * Math.cos(lon2);
-  const y =
-    A * Math.cos(lat1) * Math.sin(lon1) + B * Math.cos(lat2) * Math.sin(lon2);
-  const z = A * Math.sin(lat1) + B * Math.sin(lat2);
-
-  const lat = Math.atan2(z, Math.sqrt(x ** 2 + y ** 2));
-  const lon = Math.atan2(y, x);
-
-  return [(lon * 180) / Math.PI, (lat * 180) / Math.PI];
-}
-
-// Function to generate points along the arc
-function generateArcPoints(from, to, numPoints = 100) {
-  const points = [];
-  for (let i = 0; i <= numPoints; i++) {
-    const fraction = i / numPoints;
-    const interpolatedPoint = interpolateGreatCircle(from, to, fraction);
-    points.push({
-      position: interpolatedPoint,
-    });
-  }
-  return points;
-}
+const supabase = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL,
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+);
 
 const WorldMap = () => {
   const animationRef = useRef(null);
@@ -134,9 +38,12 @@ const WorldMap = () => {
   const [tooltipInfo, setTooltipInfo] = useState(null);
 
   // Time management
-  const currentTimestamp = Math.floor(Date.now() / 1000);
-  const startTime = currentTimestamp - 86400; // Past 24 hours
-  const endTime = currentTimestamp;
+  const currentTimestamp = Math.floor(Date.now() / 1000); // Current time in seconds
+  const startTime = currentTimestamp - 86400; // 24 hours ago
+  const endTime = currentTimestamp; // Current time
+
+  const yesterday = new Date(Date.now() - 86400000); // Yesterday's date
+  const flightDate = yesterday.toISOString().split("T")[0]; // Format as YYYY-MM-DD
 
   const [currentTime, setCurrentTime] = useState(startTime);
   const [isPlaying, setIsPlaying] = useState(false);
@@ -144,26 +51,27 @@ const WorldMap = () => {
   const SPEED = 10000; // Number of seconds per real-time second
 
   useEffect(() => {
+    const fetchFlightData = async () => {
+      try {
+        // Get the latest diverted flights
+        const { data, error } = await supabase
+          .from("diverted_flights")
+          .select("data")
+          .eq("flight_date", flightDate)
+          .single();
+
+        if (error) throw new Error("No flight data found");
+
+        const updatedFlights = getFlightsWithLocations(data);
+
+        setFlights(updatedFlights);
+      } catch (error) {
+        console.error("Error fetching flight data:", error);
+      }
+    };
+
     fetchFlightData();
   }, []);
-
-  const fetchFlightData = async () => {
-    try {
-      // TODO: get flights from the past 24 hours for a city
-      // const response = await fetchFlightsFromAPI();
-
-      const validFlights = rawFlightData.data.filter((flight) => {
-        const dep = airportCoordinates[flight.departure.icao];
-        const arr = airportCoordinates[flight.arrival.icao];
-        return dep && arr;
-      });
-      const updatedFlights = getFlightsWithLocations(validFlights);
-
-      setFlights(updatedFlights);
-    } catch (error) {
-      console.error("Error fetching flight data:", error);
-    }
-  };
 
   useEffect(() => {
     if (flights.length === 0) return;
@@ -250,7 +158,7 @@ const WorldMap = () => {
       _lighting: "pbr",
     });
 
-    setLayers([arcLayer, depLayer, arrLayer, airplaneLayer]);
+    setLayers([depLayer, arrLayer, airplaneLayer, arcLayer]);
   }, [flights, currentTime]);
 
   const animateTime = useCallback(() => {
