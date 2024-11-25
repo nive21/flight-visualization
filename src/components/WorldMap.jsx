@@ -26,8 +26,8 @@ const ACCENT_COLOR_1 = [128, 0, 128];
 const ACCENT_COLOR_2 = [46, 139, 87];
 
 const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL,
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+  process.env.REACT_APP_SUPABASE_URL,
+  process.env.REACT_APP_SUPABASE_ANON_KEY
 );
 
 const WorldMap = () => {

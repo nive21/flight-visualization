@@ -7,7 +7,6 @@ const TimeSlider = ({
   onTimeChange,
 }) => {
   // Convert timestamps to readable format
-  const formatTime = (timestamp) => new Date(timestamp * 1000).toLocaleString();
 
   return (
     <div style={{ zIndex: 3, position: "absolute" }}>
@@ -19,10 +18,15 @@ const TimeSlider = ({
         value={currentTime}
         onChange={onTimeChange}
       />
-      <div>
-        <span>{formatTime(startTime)}</span>
-        <span>{formatTime(currentTime)}</span>
-        <span>{formatTime(endTime)}</span>
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          color: "whitesmoke",
+        }}
+      >
+        <span>24 hours ago</span>
+        <span>Now</span>
       </div>
     </div>
   );
