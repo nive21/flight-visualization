@@ -31,38 +31,43 @@ export const getLocationLayer = (validFlights, color, type) => ({
 });
 
 export const getFlightsWithLocations = (flights) => {
-  return flights.map((flight) => {
-    const departureAirport = airportCoordinates?.[flight.departure.icao];
-    const arrivalAirport = airportCoordinates?.[flight.arrival.icao];
+  return flights
+    .map((flight) => {
+      const departureAirport = airportCoordinates?.[flight.departure.icao];
+      const arrivalAirport = airportCoordinates?.[flight.arrival.icao];
 
-    // Get the coordinates of the departure and arrival airports
-    const { longitude: departureLongitude, latitude: departureLatitude } =
-      departureAirport;
-    const { longitude: arrivalLongitude, latitude: arrivalLatitude } =
-      arrivalAirport;
+      // Get the coordinates of the departure and arrival airports
+      const { longitude: departureLongitude, latitude: departureLatitude } =
+        departureAirport;
+      const { longitude: arrivalLongitude, latitude: arrivalLatitude } =
+        arrivalAirport;
 
-    const from = [departureLongitude, departureLatitude];
-    const to = [arrivalLongitude, arrivalLatitude];
+      const from = [departureLongitude, departureLatitude];
+      const to = [arrivalLongitude, arrivalLatitude];
 
-    const waypoints = generateArcPoints(from, to, NUM_WAYPOINTS);
+      const waypoints = generateArcPoints(from, to, NUM_WAYPOINTS);
 
-    // Calculate the progress of the flight
-    const departureTime = Math.floor(
-      new Date(flight.departure.estimated).getTime() / 1000
-    );
-    const arrivalTime = Math.floor(
-      new Date(flight.arrival.estimated).getTime() / 1000
-    );
+      // Calculate the progress of the flight
+      const departureTime = Math.floor(
+        new Date(flight.departure.estimated).getTime() / 1000
+      );
+      const arrivalTime = Math.floor(
+        new Date(flight.arrival.estimated).getTime() / 1000
+      );
+      const flightDuration = arrivalTime - departureTime;
 
-    const flightDuration = arrivalTime - departureTime;
-    return {
-      ...flight,
-      waypoints,
-      departureTime,
-      arrivalTime,
-      flightDuration,
-    };
-  });
+      // The API sometimes returns incorrect timestamps where arrival time is before the departure time
+      if (arrivalTime <= departureTime) return null;
+
+      return {
+        ...flight,
+        waypoints,
+        departureTime,
+        arrivalTime,
+        flightDuration,
+      };
+    })
+    .filter((flightData) => flightData);
 };
 
 // Function to interpolate positions along the great circle path

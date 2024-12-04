@@ -41,14 +41,10 @@ const WorldMap = () => {
   const [tooltipInfo, setTooltipInfo] = useState(null);
 
   // Time management
-  const currentTimestamp = Math.floor(Date.now() / 1000); // Current time in seconds
-  const startTime = currentTimestamp - 86400; // 24 hours ago
-  const endTime = currentTimestamp; // Current time
-
-  const yesterday = new Date(Date.now() - 86400000); // Yesterday's date
-  const flightDate = yesterday.toISOString().split("T")[0]; // Format as YYYY-MM-DD
-
+  const [startTime, setStartTime] = useState(null);
+  const [endTime, setEndTime] = useState(null);
   const [currentTime, setCurrentTime] = useState(startTime);
+
   const [isPlaying, setIsPlaying] = useState(false);
   const [title, setTitle] = useState("recently delayed flights...");
 
@@ -59,11 +55,12 @@ const WorldMap = () => {
       try {
         setIsLoading(true);
 
-        // Get the latest diverted flights
+        // Get the latest delayed flights
         const { data, error } = await supabase
           .from("diverted_flights")
           .select("data")
-          .eq("flight_date", flightDate)
+          .order("flight_date", { ascending: false })
+          .limit(1)
           .single();
 
         if (error) throw new Error("No flight data found");
@@ -79,7 +76,24 @@ const WorldMap = () => {
         const updatedFlights = getFlightsWithLocations(validFlights);
 
         if (!updatedFlights) throw new Error("Data not found!");
+
+        // Set the start and end time
+        const minTime = Math.min(
+          ...updatedFlights.map((flight) => flight.departureTime)
+        );
+        const maxTime = Math.max(
+          ...updatedFlights.map((flight) => flight.arrivalTime)
+        );
+
+        setStartTime(minTime);
+        setCurrentTime(minTime);
+        setEndTime(maxTime);
+
+        // Update the flights
         setFlights(updatedFlights);
+        setIsPlaying(true);
+
+        // Hide the title after 2 seconds
         setTimeout(() => {
           setTitle("");
         }, 2000);
@@ -92,7 +106,7 @@ const WorldMap = () => {
     };
 
     fetchFlightData();
-  }, [flightDate]);
+  }, []);
 
   useEffect(() => {
     if (flights.length === 0) return;
@@ -120,6 +134,7 @@ const WorldMap = () => {
       ...tooltip,
     });
 
+    // Displays the path
     const arcLayer = new ScatterplotLayer({
       id: "flight-path-scatter",
       data: flights.flatMap((flight) => {
@@ -127,7 +142,7 @@ const WorldMap = () => {
           (currentTime - flight.departureTime) / flight.flightDuration;
 
         if (progress >= 1) {
-          progress = 1;
+          return [];
         } else if (progress <= 0) {
           progress = 0;
         }
@@ -142,6 +157,7 @@ const WorldMap = () => {
       pickable: false,
     });
 
+    // Displays the icon of the airplane
     const airplaneLayer = new ScenegraphLayer({
       id: "airplane-layer",
       data: flights.flatMap((flight) => {
@@ -149,7 +165,7 @@ const WorldMap = () => {
           (currentTime - flight.departureTime) / flight.flightDuration;
 
         if (progress >= 1) {
-          progress = 1;
+          return [];
         } else if (progress <= 0) {
           progress = 0;
         }
