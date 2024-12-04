@@ -15,7 +15,7 @@ export default async function handler(req, res) {
 
     // Fetch the latest 100 diverted flights from AviationStack
     const apiResponse = await fetch(
-      `https://api.aviationstack.com/v1/flights?access_key=${process.env.AVIATION_STACK_ACCESS_KEY}&flight_status=diverted&limit=100`
+      `https://api.aviationstack.com/v1/flights?access_key=${process.env.AVIATION_STACK_ACCESS_KEY}&min_delay_dep=240&limit=100`
     );
 
     if (!apiResponse.ok)
@@ -28,7 +28,7 @@ export default async function handler(req, res) {
         flight_date: flightDate,
         data: apiData.data,
       },
-      { onConflict: "flight_date" } // Avoid duplicate entries
+      { onConflict: "flight_date" }
     );
 
     if (error) throw error;

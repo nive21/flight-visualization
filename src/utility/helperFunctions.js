@@ -32,10 +32,14 @@ export const getLocationLayer = (validFlights, color, type) => ({
 
 export const getFlightsWithLocations = (flights) => {
   return flights.map((flight) => {
+    const departureAirport = airportCoordinates?.[flight.departure.icao];
+    const arrivalAirport = airportCoordinates?.[flight.arrival.icao];
+
+    // Get the coordinates of the departure and arrival airports
     const { longitude: departureLongitude, latitude: departureLatitude } =
-      airportCoordinates[flight.departure.icao];
+      departureAirport;
     const { longitude: arrivalLongitude, latitude: arrivalLatitude } =
-      airportCoordinates[flight.arrival.icao];
+      arrivalAirport;
 
     const from = [departureLongitude, departureLatitude];
     const to = [arrivalLongitude, arrivalLatitude];

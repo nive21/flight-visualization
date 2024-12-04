@@ -1,3 +1,7 @@
+import styles from "../styles/Map.module.scss";
+import playIcon from "../assets/play.svg";
+import pauseIcon from "../assets/pause.svg";
+
 const TimeSlider = ({
   startTime,
   endTime,
@@ -6,11 +10,15 @@ const TimeSlider = ({
   onPlayPause,
   onTimeChange,
 }) => {
-  // Convert timestamps to readable format
-
   return (
-    <div style={{ zIndex: 3, position: "absolute" }}>
-      <button onClick={onPlayPause}>{isPlaying ? "Pause" : "Play"}</button>
+    <div className={styles.timeSlider}>
+      <button onClick={onPlayPause}>
+        {isPlaying ? (
+          <img src={pauseIcon} alt="pause" />
+        ) : (
+          <img src={playIcon} alt="play" />
+        )}
+      </button>
       <input
         type="range"
         min={startTime}
@@ -18,16 +26,6 @@ const TimeSlider = ({
         value={currentTime}
         onChange={onTimeChange}
       />
-      <div
-        style={{
-          display: "flex",
-          justifyContent: "space-between",
-          color: "whitesmoke",
-        }}
-      >
-        <span>24 hours ago</span>
-        <span>Now</span>
-      </div>
     </div>
   );
 };

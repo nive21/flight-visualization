@@ -13,6 +13,8 @@ import {
   NUM_WAYPOINTS,
 } from "../utility/helperFunctions";
 import { createClient } from "@supabase/supabase-js";
+import airportCoordinates from "../data/airports";
+import styles from "../styles/Map.module.scss";
 
 const MAPBOX_TOKEN = process.env.REACT_APP_MAPBOX_ACCESS_TOKEN;
 const INITIAL_VIEW_STATE = {
@@ -34,6 +36,7 @@ const WorldMap = () => {
   const animationRef = useRef(null);
 
   const [flights, setFlights] = useState([]);
+  const [isLoading, setIsLoading] = useState(false);
   const [layers, setLayers] = useState([]);
   const [tooltipInfo, setTooltipInfo] = useState(null);
 
@@ -47,12 +50,15 @@ const WorldMap = () => {
 
   const [currentTime, setCurrentTime] = useState(startTime);
   const [isPlaying, setIsPlaying] = useState(false);
+  const [title, setTitle] = useState("recently delayed flights...");
 
   const SPEED = 10000; // Number of seconds per real-time second
 
   useEffect(() => {
     const fetchFlightData = async () => {
       try {
+        setIsLoading(true);
+
         // Get the latest diverted flights
         const { data, error } = await supabase
           .from("diverted_flights")
@@ -62,16 +68,31 @@ const WorldMap = () => {
 
         if (error) throw new Error("No flight data found");
 
-        const updatedFlights = getFlightsWithLocations(data);
+        const validFlights = data.data.filter(
+          (flight) =>
+            flight.departure.icao &&
+            flight.arrival.icao &&
+            airportCoordinates[flight.departure.icao] &&
+            airportCoordinates[flight.arrival.icao]
+        );
 
+        const updatedFlights = getFlightsWithLocations(validFlights);
+
+        if (!updatedFlights) throw new Error("Data not found!");
         setFlights(updatedFlights);
+        setTimeout(() => {
+          setTitle("");
+        }, 2000);
       } catch (error) {
+        setTitle("Oops! Data not found!");
         console.error("Error fetching flight data:", error);
+      } finally {
+        setIsLoading(false);
       }
     };
 
     fetchFlightData();
-  }, []);
+  }, [flightDate]);
 
   useEffect(() => {
     if (flights.length === 0) return;
@@ -200,24 +221,24 @@ const WorldMap = () => {
 
   return (
     <div>
-      <TimeSlider
-        startTime={startTime}
-        endTime={endTime}
-        currentTime={currentTime}
-        isPlaying={isPlaying}
-        onPlayPause={handlePlayPause}
-        onTimeChange={handleTimeChange}
-      />
+      <div className={styles.title}>
+        <h1>{title}</h1>
+      </div>
+      {!isLoading && flights?.length && (
+        <TimeSlider
+          startTime={startTime}
+          endTime={endTime}
+          currentTime={currentTime}
+          isPlaying={isPlaying}
+          onPlayPause={handlePlayPause}
+          onTimeChange={handleTimeChange}
+        />
+      )}
       <DeckGL
         initialViewState={INITIAL_VIEW_STATE}
         controller={true}
         layers={layers}
-        style={{
-          position: "absolute",
-          width: "100%",
-          height: "100%",
-          overflow: "clip",
-        }}
+        className={styles.mapContainer}
       >
         <Map
           mapStyle="mapbox://styles/mapbox/dark-v10"
@@ -227,16 +248,10 @@ const WorldMap = () => {
       {tooltipInfo && (
         <div
           style={{
-            position: "absolute",
-            zIndex: 1,
-            pointerEvents: "none",
             left: tooltipInfo.x,
             top: tooltipInfo.y,
-            backgroundColor: "rgba(255, 255, 255, 0.8)",
-            padding: "5px",
-            borderRadius: "3px",
-            fontSize: "12px",
           }}
+          className={styles.tooltip}
         >
           {tooltipInfo.text}
         </div>
